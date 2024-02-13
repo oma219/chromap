@@ -29,7 +29,7 @@
 #include "temp_mapping.h"
 #include "utils.h"
 
-#define CHROMAP_VERSION "0.2.5-r478"
+#define CHROMAP_VERSION "0.2.6-r490"
 
 namespace chromap {
 
@@ -1181,6 +1181,8 @@ void Chromap::MapPairedEndReads() {
     //  }
     //}
   }
+  if (mapping_parameters_.mapping_output_format == MAPPINGFORMAT_SAM)
+    mapping_writer.AdjustSummaryPairedEndOverCount() ;
   mapping_writer.OutputSummaryMetadata();
 
   reference.FinalizeLoading();
