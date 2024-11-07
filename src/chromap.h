@@ -9,6 +9,11 @@
 #include <tuple>
 #include <vector>
 
+#include <queue> // Used these two for k-minhash
+#include <unordered_set>
+
+#include <sstream> // Used for chromap params splitting
+
 #include "candidate_processor.h"
 #include "cxxopts.hpp"
 #include "draft_mapping_generator.h"
@@ -32,6 +37,36 @@
 #define CHROMAP_VERSION "0.2.6-r490"
 
 namespace chromap {
+
+class K_MinHash {
+public:
+    K_MinHash(size_t k, size_t range) : k_(k), range_(range) {}
+
+    K_MinHash(): k_(250), range_(4000003) {}
+
+    void add(size_t num) {
+        if (unique_slots_.find(num) == unique_slots_.end()) {
+            unique_slots_.insert(num);
+            pq_.push(num);
+            if (pq_.size() > k_) {
+                unique_slots_.erase(pq_.top());
+                pq_.pop();
+            }
+        }
+    }
+
+    size_t compute_cardinality() {
+      if (pq_.size() < k_) {return 0;}
+      size_t cardinality = (k_ * range_)/pq_.top() - 1;
+      return cardinality;
+    }
+
+private:
+    size_t k_;
+    size_t range_;
+    std::priority_queue<uint32_t> pq_; // max-heap
+    std::unordered_set<uint32_t> unique_slots_; // keep track of unique values
+};
 
 class Chromap {
  public:
@@ -630,10 +665,39 @@ void Chromap::MapPairedEndReads() {
                                           barcode_effective_range_);
 
   // Check cache-related parameters
-  std::cerr << "cache size: " << mapping_parameters_.cache_size << std::endl;
-  std::cerr << "use all reads for cache: " << mapping_parameters_.use_all_reads << std::endl;
-  std::cerr << "cache update param: " << mapping_parameters_.cache_update_param << std::endl;
+  std::cerr << "Cache Size: " << mapping_parameters_.cache_size << std::endl;
+  std::cerr << "Use All Reads for Cache: " << mapping_parameters_.use_all_reads << std::endl;
+  std::cerr << "Cache Update Param: " << mapping_parameters_.cache_update_param << std::endl;
+  
+  std::vector<uint64_t> seeds_for_batch(500000, 0);
 
+  // Variables used for counting number of associated cache slots
+  bool output_peak_info = mapping_parameters_.output_peak_info;
+
+  const size_t k_for_minhash = mapping_parameters_.k_for_minhash;
+  int num_locks_for_map = 1000;
+  std::vector<std::unordered_map<size_t, K_MinHash>> barcode_peak_map(num_locks_for_map);
+
+  std::cerr << "Output Peak Info: " << output_peak_info << std::endl;
+  std::cerr << "K for MinHash: " << k_for_minhash << std::endl;
+
+  omp_lock_t map_locks[num_locks_for_map];
+  for (int i = 0; i < num_locks_for_map; ++i) {omp_init_lock(&map_locks[i]);}
+
+  // Parse out the parameters for chromap score (const, fric, dup, unmapped, lowmapq)
+  std::vector<double> chromap_score_params; 
+  std::stringstream ss(mapping_parameters_.chromap_score_params);
+  std::string token;
+
+  while(std::getline(ss, token, ';')) {
+    try {
+      auto curr_param = std::stod(token);
+      chromap_score_params.push_back(curr_param);
+    } catch(...) {
+      chromap::ExitWithMessage("\nException occurred while processing chromap score parameters\n");
+    }
+  }
+  if (chromap_score_params.size() != 5) {chromap::ExitWithMessage("\nInvalid number of parameters, expecting 5 parameters but found " + std::to_string(chromap_score_params.size()) + " parameters\n");}
 
   // Initialize cache
   mm_cache mm_to_candidates_cache(2000003);
@@ -753,7 +817,7 @@ void Chromap::MapPairedEndReads() {
       }
     }
 
-#pragma omp parallel shared(num_reads_, num_reference_sequences, reference, index, read_batch1, read_batch2, barcode_batch, read_batch1_for_loading, read_batch2_for_loading, barcode_batch_for_loading, minimizer_generator, candidate_processor, mapping_processor, draft_mapping_generator, mapping_generator, mapping_writer, std::cerr, num_loaded_pairs_for_loading, num_loaded_pairs, mappings_on_diff_ref_seqs_for_diff_threads, mappings_on_diff_ref_seqs_for_diff_threads_for_saving, mappings_on_diff_ref_seqs, num_mappings_in_mem, max_num_mappings_in_mem, temp_mapping_file_handles, mm_to_candidates_cache, mm_history1, mm_history2) num_threads(mapping_parameters_.num_threads) reduction(+:num_candidates_, num_mappings_, num_mapped_reads_, num_uniquely_mapped_reads_, num_barcode_in_whitelist_, num_corrected_barcode_)
+#pragma omp parallel shared(num_reads_, num_reference_sequences, reference, index, seeds_for_batch, read_batch1, read_batch2, barcode_batch, read_batch1_for_loading, read_batch2_for_loading, barcode_batch_for_loading, minimizer_generator, candidate_processor, mapping_processor, draft_mapping_generator, mapping_generator, mapping_writer, std::cerr, num_loaded_pairs_for_loading, num_loaded_pairs, mappings_on_diff_ref_seqs_for_diff_threads, mappings_on_diff_ref_seqs_for_diff_threads_for_saving, mappings_on_diff_ref_seqs, num_mappings_in_mem, max_num_mappings_in_mem, temp_mapping_file_handles, mm_to_candidates_cache, mm_history1, mm_history2) num_threads(mapping_parameters_.num_threads) reduction(+:num_candidates_, num_mappings_, num_mapped_reads_, num_uniquely_mapped_reads_, num_barcode_in_whitelist_, num_corrected_barcode_)
     {
       thread_num_candidates = 0;
       thread_num_mappings = 0;
@@ -788,8 +852,6 @@ void Chromap::MapPairedEndReads() {
                                                     mapping_parameters_.use_all_reads,
                                                     mapping_parameters_.cache_update_param
                                                     );
-
-          std::vector<uint64_t> seeds_for_batch(num_loaded_pairs, 0);
           int cache_hits_for_batch = 0;
 
           if (mapping_parameters_.debug_cache) {
@@ -799,12 +861,17 @@ void Chromap::MapPairedEndReads() {
 #pragma omp taskloop grainsize(grain_size) reduction(+:cache_hits_for_batch)
           for (uint32_t pair_index = 0; pair_index < num_loaded_pairs;
                ++pair_index) {
+
             bool current_barcode_is_whitelisted = true;
             if (!mapping_parameters_.barcode_whitelist_file_path.empty()) {
               current_barcode_is_whitelisted = CorrectBarcodeAt(
                   pair_index, barcode_batch, thread_num_barcode_in_whitelist,
                   thread_num_corrected_barcode);
             }
+
+            // calculate seed value for each barcode to use later (below and summary update)
+            size_t curr_seed_val = barcode_batch.GenerateSeedFromSequenceAt(pair_index, 0, barcode_length_);
+            seeds_for_batch[pair_index] = curr_seed_val;
 
             if (current_barcode_is_whitelisted ||
                 mapping_parameters_.output_mappings_not_in_whitelist) {
@@ -860,13 +927,28 @@ void Chromap::MapPairedEndReads() {
                 size_t current_num_candidates2 = paired_end_mapping_metadata.mapping_metadata2_.GetNumCandidates();
 
                 // increment variable for cache_hits
+                bool curr_read_hit_cache = false;
                 if (cache_query_result1 >= 0 || cache_query_result2 >= 0) {
                   cache_hits_for_batch++;
+                  curr_read_hit_cache = true;
                 }
 
                 // calculate seed value for each barcode to use later (below and summary update)
-                size_t curr_seed_val = barcode_batch.GenerateSeedFromSequenceAt(pair_index, 0, barcode_length_);
-                seeds_for_batch[pair_index] = curr_seed_val;
+                // size_t curr_seed_val = barcode_batch.GenerateSeedFromSequenceAt(pair_index, 0, barcode_length_);
+                // seeds_for_batch[pair_index] = curr_seed_val;
+
+                // update the peak counting data-structure
+                if (output_peak_info && curr_read_hit_cache) {
+                  // calculate which map this barcode is in
+                  size_t map_id = curr_seed_val % num_locks_for_map;
+                
+                  // grab lock for this map, and add to the K-MinHash for this particular barcode
+                  omp_set_lock(&map_locks[map_id]);
+                  auto it = barcode_peak_map[map_id].emplace(curr_seed_val, K_MinHash(k_for_minhash, mapping_parameters_.cache_size)).first;
+                  if (cache_query_result1 >= 0) {it->second.add(cache_query_result1);}
+                  if (cache_query_result2 >= 0) {it->second.add(cache_query_result2);}
+                  omp_unset_lock(&map_locks[map_id]);
+                }
 
                 if (pair_index < history_update_threshold) {
                   mm_history1[pair_index].timestamp =
@@ -1113,6 +1195,11 @@ void Chromap::MapPairedEndReads() {
           barcode_batch_for_loading.SwapSequenceBatch(barcode_batch);
           mappings_on_diff_ref_seqs_for_diff_threads.swap(
               mappings_on_diff_ref_seqs_for_diff_threads_for_saving);
+          
+          // Reset for next batch
+          std::fill(seeds_for_batch.begin(), seeds_for_batch.end(), 0);
+          
+
 #pragma omp task
           {
             // Handle output
@@ -1236,8 +1323,28 @@ void Chromap::MapPairedEndReads() {
   }
   if (mapping_parameters_.mapping_output_format == MAPPINGFORMAT_SAM)
     mapping_writer.AdjustSummaryPairedEndOverCount() ;
-  mapping_writer.OutputSummaryMetadata();
 
+  // Destory the locks used for map
+  for (int i = 0; i < num_locks_for_map; ++i) {
+    omp_destroy_lock(&map_locks[i]);
+  }
+
+  // Add cardinality information to summary metadata
+  if (output_peak_info) {
+    for (auto curr_map: barcode_peak_map) {
+      for (auto &pair: curr_map) {
+        size_t curr_seed = pair.first;
+        size_t est_num_slots = pair.second.compute_cardinality();
+
+        mapping_writer.UpdateSummaryMetadata( 
+                          curr_seed,
+                          SUMMARY_METADATA_CARDINALITY, 
+                          est_num_slots);
+      }
+    }
+  }
+  
+  mapping_writer.OutputSummaryMetadata(chromap_score_params, output_peak_info);
   reference.FinalizeLoading();
   
   std::cerr << "Total time: " << GetRealTime() - real_start_time << "s.\n";

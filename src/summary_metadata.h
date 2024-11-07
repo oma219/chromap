@@ -19,6 +19,7 @@ enum SummaryMetadataField {
   SUMMARY_METADATA_MAPPED,
   SUMMARY_METADATA_LOWMAPQ,
 	SUMMARY_METADATA_CACHEHIT,
+  SUMMARY_METADATA_CARDINALITY,
   //SUMMARY_METADATA_CACHEHIT_FWD, 
   SUMMARY_METADATA_FIELDS
 };
@@ -43,25 +44,56 @@ class SummaryMetadata {
     kh_destroy(k64_barcode_metadata, barcode_metadata_);
   }
 
-  void Output(const char *filename) {
+  void Output(const char *filename, std::vector<double> score_coeffs, bool output_peak_info) {
     FILE *fp = fopen(filename, "w");
-    fprintf(fp, "barcode,total,duplicate,unmapped,lowmapq,cachehit,fric\n");   
+
+    // change header based on command line options
+    if (!output_peak_info)
+      fprintf(fp, "barcode,total,duplicate,unmapped,lowmapq,cachehit,fric,score\n");
+    else  
+      fprintf(fp, "barcode,total,duplicate,unmapped,lowmapq,cachehit,numslots,fric,score\n");
+    
+    // iterate through all barcodes
     khiter_t k;
-    for (k = kh_begin(barcode_metadata_); k != kh_end(barcode_metadata_); ++k)
-      if (kh_exist(barcode_metadata_, k)) {
+    for (k = kh_begin(barcode_metadata_); k != kh_end(barcode_metadata_); ++k) {
+      if (kh_exist(barcode_metadata_, k)) 
+      {
+        // define variables to store values
+        double fric = 0.0;
+        double num_dup = kh_value(barcode_metadata_, k).counts[SUMMARY_METADATA_DUP]; 
+        double num_unmapped = kh_value(barcode_metadata_, k).counts[SUMMARY_METADATA_TOTAL] - kh_value(barcode_metadata_, k).counts[SUMMARY_METADATA_MAPPED];
+        double num_lowmapq = kh_value(barcode_metadata_, k).counts[SUMMARY_METADATA_LOWMAPQ];
+
+        // print barcode as string
         fprintf(fp, "%s", Seed2Sequence(kh_key(barcode_metadata_, k), barcode_length_).c_str());
         int i;
-        for (i = 0; i < SUMMARY_METADATA_FIELDS; ++i) {
-          if (i != SUMMARY_METADATA_MAPPED)
+
+        // prints out total # of reads, # duplicate, # unmapped, # lowmapq, # cache hit, and cardinality 
+        for (i = 0; i < SUMMARY_METADATA_FIELDS; ++i) 
+        {
+          if (i == SUMMARY_METADATA_CARDINALITY && !output_peak_info) {continue;}
+          if (i != SUMMARY_METADATA_MAPPED) {
             fprintf(fp, ",%d", kh_value(barcode_metadata_, k).counts[i]);
-          else // the print is for unmapped
+          } else { 
+            // the print is for unmapped
             fprintf(fp, ",%d", kh_value(barcode_metadata_, k).counts[SUMMARY_METADATA_TOTAL]
                 - kh_value(barcode_metadata_, k).counts[SUMMARY_METADATA_MAPPED]);
+          }
         }
-        // fric: fraction in cache
-        fprintf(fp, ",%lf", (double)kh_value(barcode_metadata_, k).counts[SUMMARY_METADATA_CACHEHIT] / (double)kh_value(barcode_metadata_, k).counts[SUMMARY_METADATA_MAPPED]);
+        // print out fric: fraction in cache
+        fric = (double)kh_value(barcode_metadata_, k).counts[SUMMARY_METADATA_CACHEHIT] / (double)kh_value(barcode_metadata_, k).counts[SUMMARY_METADATA_MAPPED];
+        fprintf(fp, ",%.5lf", fric);
+
+        // compute the chromap score and print it out
+        double chromap_score = score_coeffs[0] + /* constant */
+                               (score_coeffs[1] * fric) +
+                               (score_coeffs[2] * num_dup) +
+                               (score_coeffs[3] * num_unmapped)  +
+                               (score_coeffs[4] * num_lowmapq);
+        fprintf(fp, ",%.5lf", chromap_score);
         fprintf(fp, "\n");
       }
+    }
     fclose(fp);
   }
 

@@ -68,7 +68,7 @@ class MappingWriter {
       std::vector<TempMappingFileHandle<MappingRecord>>
           &temp_mapping_file_handles);
 
-  void OutputSummaryMetadata();
+  void OutputSummaryMetadata(std::vector<double> score_coeffs = {0.0, 0.0, 0.0, 0.0, 0.0}, bool output_peak_info = false);
   void UpdateSummaryMetadata(uint64_t barcode, int type, int change);
   void AdjustSummaryPairedEndOverCount();
 
@@ -437,10 +437,10 @@ void MappingWriter<MappingRecord>::OutputMappings(
 }
 
 template <typename MappingRecord>
-void MappingWriter<MappingRecord>::OutputSummaryMetadata() {
+void MappingWriter<MappingRecord>::OutputSummaryMetadata(std::vector<double> score_coeffs, bool output_peak_info) {
   if (!mapping_parameters_.summary_metadata_file_path.empty())
   {
-    summary_metadata_.Output(mapping_parameters_.summary_metadata_file_path.c_str());
+    summary_metadata_.Output(mapping_parameters_.summary_metadata_file_path.c_str(), score_coeffs, output_peak_info);
   }
 }
 

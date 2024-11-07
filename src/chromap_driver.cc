@@ -80,7 +80,11 @@ void AddMappingOptions(cxxopts::Options &options) {
       ("cache-size", "number of cache entries [4000003]", cxxopts::value<int>(), "INT")
       ("cache-update-param", "value used to control number of reads sampled [0.01]", cxxopts::value<double>(), "FLT")
       ("use-all-reads", "use all reads for cache")
-      ("debug-cache", "verbose output for debugging cache used in chromap");
+      ("debug-cache", "verbose output for debugging cache used in chromap")
+      ("output-peak-info", "output number of associated slots for each barcode (only if using summary file)")
+      ("chromap-score-params", "coefficients used for chromap score calculation separated by semi-colons",
+      cxxopts::value<std::string>(), "STR")
+      ("k-for-minhash", "number of values stored in each MinHash sketch [250]", cxxopts::value<int>(), "INT");
 }
 
 void AddInputOptions(cxxopts::Options &options) {
@@ -348,6 +352,21 @@ void ChromapDriver::ParseArgsAndRun(int argc, char *argv[]) {
   if (result.count("debug-cache")) {
     mapping_parameters.debug_cache = true;
   }
+  if (result.count("output-peak-info")) {
+    mapping_parameters.output_peak_info = true;
+    if (!result.count("summary")) {
+      chromap::ExitWithMessage("Cannot output number of associated cache slots if summary file is not specified.\n");
+    }
+  }
+  if (result.count("chromap-score-params")) {
+    mapping_parameters.chromap_score_params = result["chromap-score-params"].as<std::string>();
+  }
+  if (result.count("k-for-minhash")) {
+    mapping_parameters.k_for_minhash = result["k-for-minhash"].as<int>();
+    if (mapping_parameters.k_for_minhash < 1 || mapping_parameters.k_for_minhash >= 2000) {
+      chromap::ExitWithMessage("Invalid paramter for size of MinHash sketch (--k-for-minhash)");
+    }
+  }
 
 
   if (result.count("min-read-length")) {
@@ -432,6 +451,20 @@ void ChromapDriver::ParseArgsAndRun(int argc, char *argv[]) {
   if (result.count("peak-merge-max-length")) {
     mapping_parameters.peak_merge_max_length =
         result["peak-merge-max-length"].as<int>();
+  }
+
+  if (result.count("param-set")) {
+    std::string param_set = result["param-set"].as<std::string>();
+    std::vector<std::string> params;
+    std::stringstream ss(param_set);
+    std::string item;
+    while (std::getline(ss, item, ';')) {
+      params.push_back(item);
+    }
+    // Store or process the parameters as needed
+    for (const auto &param : params) {
+      std::cerr << "Parameter: " << param << "\n";
+    }
   }
 
   std::cerr << std::setprecision(2) << std::fixed;
