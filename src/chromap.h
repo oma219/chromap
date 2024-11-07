@@ -700,8 +700,9 @@ void Chromap::MapPairedEndReads() {
   if (chromap_score_params.size() != 5) {chromap::ExitWithMessage("\nInvalid number of parameters, expecting 5 parameters but found " + std::to_string(chromap_score_params.size()) + " parameters\n");}
 
   // Initialize cache
-  mm_cache mm_to_candidates_cache(2000003);
+  mm_cache mm_to_candidates_cache(mapping_parameters_.cache_size);
   mm_to_candidates_cache.SetKmerLength(kmer_size);
+  
   struct _mm_history *mm_history1 = new struct _mm_history[read_batch_size_];
   struct _mm_history *mm_history2 = new struct _mm_history[read_batch_size_];
   // The explanation for read_map_summary is in the single-end mapping function
@@ -1346,6 +1347,7 @@ void Chromap::MapPairedEndReads() {
   
   mapping_writer.OutputSummaryMetadata(chromap_score_params, output_peak_info);
   reference.FinalizeLoading();
+  if (mapping_parameters_.debug_cache) {mm_to_candidates_cache.PrintStats();}
   
   std::cerr << "Total time: " << GetRealTime() - real_start_time << "s.\n";
 }
