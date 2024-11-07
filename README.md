@@ -25,6 +25,9 @@ cd chromap && make
     - [Map ChIP-seq short reads](#map-chip)
     - [Map ATAC-seq/scATAC-seq short reads](#map-atac)
     - [Map Hi-C short reads](#map-hic)
+  - [Quality control for scATAC-seq](#atacseq-qc)
+    - [Estimating FRiP](#estfrip)
+    - [Features to assist in doublet detection](#doublet)
   - [Getting help](#help)
   - [Citing Chromap](#cite)
 
@@ -123,6 +126,44 @@ Besides, Chromap can translate input cell barcodes to another set of barcodes. U
 chromap --preset hic -x index -r ref.fa -1 read1.fa -2 read2.fa -o aln.pairs           # Hi-C reads and pairs output
 ```
 Chromap will perform split alignment (**--split-alignment**) on Hi-C reads and output mappings in [pairs][pairs] format (**--pairs**), which is used in [4DN Hi-C data processing pipeline][4DN]. Some Hi-C data analysis pipelines may require the reads are sorted in specific chromosome order other than the one in the index. Therefore, Chromap provides the option **--chr-order** to specify the alignment order, and **--pairs-natural-chr-order** for flipping the pair in the pairs format. 
+
+### <a name="atacseq-qc"></a>Quality control for scATAC-seq
+
+Chromap contains features to assist in assessing the quality of scATAC-seq datasets. In scATAC-seq datasets, measuring the fraction of reads in peak regions (FRiP) in addition to identifyinng potential doublets are common quality-control steps taken to assess/filter datasets prior to analysis.
+
+#### <a name="estfrip"></a>Estimating FRiP
+
+Chromap outputs the *chromap score* for each single cell which is an estimate of the FRiP and it is generated using a simple multi-variate linear model. The larger the **chromap score** is the higher the quality of the data. This command shows how to generate the summary file which includes the *chromap score*.
+
+```sh
+chromap --preset atac -r ref.fa -x index -1 mate1.fq -2 mate2.fq -o aln.bed -b barcode.fq --barcode-whitelist whitelist.txt --summary summ.csv
+```
+
+The columns in `summ.csv` are
+```
+barcode,total,duplicate,unmapped,lowmapq,cachehit,fric,score
+```
+- `barcode` - Barcode label for cell
+- `total` - Total number of fragments
+- `duplicate` - Number of duplicate fragments
+- `unmapped` - Number of unmapped fragments 
+- `lowmapq` - Number of fragments with a low MAPQ
+- `cachehit` - Number of fragments that were found in the chromap cache during alignment
+- `fric` - Fraction of fragments in the chromap cache
+- `score` - **chromap score**, metric used to access quality of ATAC-seq data
+
+#### <a name="doublet"></a>Features to assist in doublet detection
+
+Typically for doublet detection in single-cell datasets, a simple and naive metric used to identify potential doublets is the number of fragments in cells (i.e. more reads, more likely a doublet). 
+
+Chromap adapts this idea to scATAC-seq by trying to roughly estimate the number of peaks in each single cell where the intuition is that cells with a large number of peaks are more likely to be doublets. In our experiments, this feature has a larger AUC value when it comes to classifying doublets and could be used to assist users in filtering.
+
+In order to compute the estimated number of peaks in each cell, users must specify the `--output-peak-info` at run time along with a `--summary [PATH]`. The estimate will be output in the summary file as an additional column. 
+
+Here are the columns in the summary file when using `--output-peak-info`.
+```
+barcode,total,duplicate,unmapped,lowmapq,cachehit,numslots,fric,score
+```
 
 ### <a name="help"></a>Getting help
 
