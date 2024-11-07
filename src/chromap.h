@@ -1124,12 +1124,14 @@ void Chromap::MapPairedEndReads() {
                 mm_history1[pair_index].minimizers,
                 mm_history1[pair_index].positive_candidates,
                 mm_history1[pair_index].negative_candidates,
-                mm_history1[pair_index].repetitive_seed_length);
+                mm_history1[pair_index].repetitive_seed_length,
+                mapping_parameters_.debug_cache);
             mm_to_candidates_cache.Update(
                 mm_history2[pair_index].minimizers,
                 mm_history2[pair_index].positive_candidates,
                 mm_history2[pair_index].negative_candidates,
-                mm_history2[pair_index].repetitive_seed_length);
+                mm_history2[pair_index].repetitive_seed_length,
+                mapping_parameters_.debug_cache);
 
             if (mm_history1[pair_index].positive_candidates.size() > 50) {
               std::vector<Candidate>().swap(
